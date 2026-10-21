@@ -1,12 +1,13 @@
-javascript
 const axios = require('axios');
 const express = require('express');
 const app = express();
 
 // --- CONFIGURATION ---
-const BOT_TOKEN = '8699953525:AAF8g1Z-DSJwx9zm6McNST_6ITrYv0gWpww'; // Paste your token here
-const ADMIN_CHAT_ID = '8699953525'; // Paste your numeric ID here
+const BOT_TOKEN = process.env.BOT_TOKEN || '8699953525:AAF8g1Z-DSJwx9zm6McNST_6ITrYv0gWpww';
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '8699953525';
 const PORT = process.env.PORT || 3000;
+
+app.use(express.json()); // <--- Hii ilikua missing
 
 // In-memory storage for pending requests
 let submissions = {}; 
@@ -17,7 +18,7 @@ const botUrl = `https://api.telegram.org/bot${BOT_TOKEN}`;
 // Helper: Send message to Admin (You)
 async function sendToAdmin(text, replyMarkup = null) {
     try {
-        await axios.post(${botUrl}/sendMessage, {
+        await axios.post(`${botUrl}/sendMessage`, {
             chat_id: ADMIN_CHAT_ID,
             text: text,
             parse_mode: 'HTML',
@@ -31,12 +32,12 @@ async function sendToAdmin(text, replyMarkup = null) {
 // Helper: Send message to User
 async function sendToUser(chatIdOrUsername, text) {
     try {
-        await axios.post(${botUrl}/sendMessage, {
+        await axios.post(`${botUrl}/sendMessage`, {
             chat_id: chatIdOrUsername,
             text: text
         });
     } catch (err) {
-        console.log(Could not reach user ${chatIdOrUsername}:, err.response ? err.response.data : err.message);
+        console.log(`Could not reach user ${chatIdOrUsername}:`, err.response ? err.response.data : err.message);
     }
 }
 
@@ -56,16 +57,16 @@ app.post('/webhook/kyc-submit', async (req, res) => {
     // Create Inline Keyboard for Admin
     const keyboard = {
         inline_keyboard: [
-            [{ text: "✅ Approve", callback_data: approve_${submissionId} }],
-            [{ text: "❌ Reject", callback_data: reject_${submissionId} }]
+            [{ text: "✅ Approve", callback_data: `approve_${submissionId}` }],
+            [{ text: "❌ Reject", callback_data: `reject_${submissionId}` }]
         ]
     };
 
-    const message = 🆕 <b>New Request</b>\n\n +
-                    👤 Name: ${name}\n +
-                    📧 Email: ${email}\n +
-                    🔗 Photos: ${photos.join('\n')}\n +
-                    💬 TG ID: ${telegramChatId || 'N/A'};
+    const message = `🆕 <b>New Request</b>\n\n` +
+                    `👤 Name: ${name}\n` +
+                    `📧 Email: ${email}\n` +
+                    `🔗 Photos: ${photos.join('\n')}\n` +
+                    `💬 TG ID: ${telegramChatId || 'N/A'}`;
 
     await sendToAdmin(message, keyboard);
     res.json({ success: true });
@@ -77,19 +78,19 @@ app.post('/webhook/callback', async (req, res) => {
     
     if (update.callback_query) {
         const query = update.callback_query;
-        const action = query.data.split('')[0];
-        const id = query.data.split('')[1];
+        const action = query.data.split('_')[0];
+        const id = query.data.split('_')[1];
         
         const data = submissions[id];
         if (data) {
             const status = action === 'approve' ? 'Approved' : 'Rejected';
             
             // Notify Admin
-            await sendToAdmin(✅ ${data.name} has been ${status}.);
+            await sendToAdmin(`✅ ${data.name} has been ${status}.`);
 
             // Notify User
             if (data.telegramChatId) {
-                await sendToUser(data.telegramChatId, Hello ${data.name}, your request has been ${status}.);
+                await sendToUser(data.telegramChatId, `Hello ${data.name}, your request has been ${status}.`);
             }
 
             // Clean up
@@ -97,9 +98,8 @@ app.post('/webhook/callback', async (req, res) => {
         }
         res.json({ status: 'ok' });
     } else {
-
-res.json({ status: 'ignored' });
+        res.json({ status: 'ignored' });
     }
 });
 
-app.listen(PORT, () => console.log(Server running on port ${PORT}));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
