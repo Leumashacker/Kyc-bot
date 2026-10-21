@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3000;
 let submissions = {}; 
 
 // --- TELEGRAM SETUP ---
-const botUrl = https://api.telegram.org/bot${8699953525:AAF8g1Z-DSJwx9zm6McNST_6ITrYv0gWpww};
+const botUrl = https://api.telegram.org/bot${BOT_TOKEN};
 
 // Helper: Send message to Admin (You)
 async function sendToAdmin(text, replyMarkup = null) {
