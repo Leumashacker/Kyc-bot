@@ -1,105 +1,114 @@
 const axios = require('axios');
 const express = require('express');
+const multer = require('multer');
+const FormData = require('form-data');
 const app = express();
 
-// --- CONFIGURATION ---
-const BOT_TOKEN = process.env.BOT_TOKEN || '8699953525:AAF8g1Z-DSJwx9zm6McNST_6ITrYv0gWpww';
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '8699953525';
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json()); // <--- Hii ilikua missing
+app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Methods', '*');
+  next();
+});
 
-// In-memory storage for pending requests
-let submissions = {}; 
-
-// --- TELEGRAM SETUP ---
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+let submissions = {};
 const botUrl = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// Helper: Send message to Admin (You)
 async function sendToAdmin(text, replyMarkup = null) {
-    try {
-        await axios.post(`${botUrl}/sendMessage`, {
-            chat_id: ADMIN_CHAT_ID,
-            text: text,
-            parse_mode: 'HTML',
-            reply_markup: replyMarkup
-        });
-    } catch (err) {
-        console.error("Error sending to admin:", err.response ? err.response.data : err.message);
-    }
+  await axios.post(`${botUrl}/sendMessage`, {
+    chat_id: ADMIN_CHAT_ID,
+    text: text,
+    parse_mode: 'HTML',
+    reply_markup: replyMarkup
+  });
 }
 
-// Helper: Send message to User
-async function sendToUser(chatIdOrUsername, text) {
-    try {
-        await axios.post(`${botUrl}/sendMessage`, {
-            chat_id: chatIdOrUsername,
-            text: text
-        });
-    } catch (err) {
-        console.log(`Could not reach user ${chatIdOrUsername}:`, err.response ? err.response.data : err.message);
-    }
+// Send photo buffer to Telegram
+async function sendPhotoToAdmin(buffer, filename, caption = '') {
+  const form = new FormData();
+  form.append('chat_id', ADMIN_CHAT_ID);
+  form.append('photo', buffer, { filename: filename });
+  if (caption) form.append('caption', caption);
+  form.append('parse_mode', 'HTML');
+  
+  await axios.post(`${botUrl}/sendPhoto`, form, {
+    headers: form.getHeaders()
+  });
 }
 
-// --- WEBHOOK ENDPOINT (Your Website calls this) ---
-app.post('/webhook/kyc-submit', async (req, res) => {
-    const { name, email, username, photos, telegramChatId } = req.body;
+app.get('/', (req, res) => res.send('KYC Bot is running ✅ - Ready to receive photos'));
 
-    if (!name || !photos) {
-        return res.status(400).json({ error: "Missing data" });
+app.post('/webhook/kyc-submit', upload.array('photos', 5), async (req, res) => {
+  try {
+    const { name, email, username } = req.body;
+    const files = req.files;
+
+    if (!name || !files || files.length === 0) {
+      return res.status(400).json({ error: "Missing data" });
     }
 
     const submissionId = Date.now().toString();
-    
-    // Store the data
-    submissions[submissionId] = { name, email, username, photos, telegramChatId };
+    submissions[submissionId] = { name, email, username };
 
-    // Create Inline Keyboard for Admin
     const keyboard = {
-        inline_keyboard: [
-            [{ text: "✅ Approve", callback_data: `approve_${submissionId}` }],
-            [{ text: "❌ Reject", callback_data: `reject_${submissionId}` }]
-        ]
+      inline_keyboard: [
+        [{ text: "✅ Approve", callback_data: `approve_${submissionId}` }],
+        [{ text: "❌ Reject", callback_data: `reject_${submissionId}` }]
+      ]
     };
 
-    const message = `🆕 <b>New Request</b>\n\n` +
-                    `👤 Name: ${name}\n` +
-                    `📧 Email: ${email}\n` +
-                    `🔗 Photos: ${photos.join('\n')}\n` +
-                    `💬 TG ID: ${telegramChatId || 'N/A'}`;
+    // 1. Tuma info kwanza
+    const infoMessage = `🆕 <b>New KYC Request</b>\n\n` +
+                        `👤 Name: ${name}\n` +
+                        `📧 Email: ${email}\n` +
+                        `🔗 TG: ${username || 'N/A'}\n` +
+                        `📸 Photos: ${files.length}\n` +
+                        `🆔 ID: ${submissionId}`;
 
-    await sendToAdmin(message, keyboard);
-    res.json({ success: true });
+    await sendToAdmin(infoMessage);
+
+    // 2. Tuma picha zote kwa Admin
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const caption = i === 0 ? `Photos for ${name} (ID: ${submissionId})` : '';
+      await sendPhotoToAdmin(file.buffer, file.originalname, caption);
+    }
+
+    // 3. Tuma buttons za Approve/Reject
+    await sendToAdmin(`👆 Approve or Reject ${name}?`, keyboard);
+
+    res.json({ success: true, id: submissionId });
+  } catch (err) {
+    console.error(err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to send to Telegram" });
+  }
 });
 
-// --- CALLBACK HANDLER (When you click buttons) ---
 app.post('/webhook/callback', async (req, res) => {
-    const update = req.body;
+  const update = req.body;
+  if (update.callback_query) {
+    const query = update.callback_query;
+    const [action, id] = query.data.split('_');
+    const data = submissions[id];
     
-    if (update.callback_query) {
-        const query = update.callback_query;
-        const action = query.data.split('_')[0];
-        const id = query.data.split('_')[1];
-        
-        const data = submissions[id];
-        if (data) {
-            const status = action === 'approve' ? 'Approved' : 'Rejected';
-            
-            // Notify Admin
-            await sendToAdmin(`✅ ${data.name} has been ${status}.`);
-
-            // Notify User
-            if (data.telegramChatId) {
-                await sendToUser(data.telegramChatId, `Hello ${data.name}, your request has been ${status}.`);
-            }
-
-            // Clean up
-            delete submissions[id];
-        }
-        res.json({ status: 'ok' });
-    } else {
-        res.json({ status: 'ignored' });
+    if (data) {
+      const status = action === 'approve' ? 'Approved' : 'Rejected';
+      await sendToAdmin(`✅ <b>${data.name}</b> has been <b>${status}</b> (ID: ${id})`);
+      delete submissions[id];
     }
+
+    await axios.post(`${botUrl}/answerCallbackQuery`, {
+      callback_query_id: query.id,
+      text: `User ${action}d successfully!`
+    });
+  }
+  res.json({ status: 'ok' });
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
